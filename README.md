@@ -88,6 +88,42 @@ def _calculate_iou(self, box1, box2):
 Tính diện tích giao và hợp của 2 bounding box
 Dùng để xác định mức độ trùng khớp giữa dự đoán và detection
 
+Trong mã, IoU được dùng như một tiêu chí lựa chọn hộp phát hiện tốt nhất để theo dõi mục tiêu hiện tại. Điều này giúp cải thiện độ chính xác của hệ thống, giảm lỗi nhận dạng sai, đặc biệt là trong các tình huống phức tạp như có nhiều đối tượng trong khung hình hoặc mục tiêu di chuyển nhanh.
+
+**- Vai trò của IoU trong mã**
+
+a) Lựa chọn hộp phát hiện tốt nhất khi đã có mục tiêu cần theo dõi (tracking):
+
+Khi hệ thống đang theo dõi một mục tiêu (một người cụ thể), chương trình cần xác định vị trí mới của mục tiêu trong khung hình.
+Phương pháp dự đoán vị trí mục tiêu tiếp theo dựa vào lịch sử vị trí trước đó (predict_position).
+IoU được sử dụng để so sánh hộp phát hiện với vị trí dự đoán, hộp nào có giá trị IoU cao nhất và vượt qua ngưỡng (IoU > 0.3) sẽ được chọn làm hộp theo dõi mới.
+
+```python
+for i, box in enumerate(detected_boxes):
+    if has_target_color[i]:
+        if self._is_in_search_region(box, search_region):
+            iou = self._calculate_iou(predicted_position, box)
+            if iou > best_iou:
+                best_iou = iou
+                best_box = box
+```
+
+b) Giảm thiểu lỗi nhận dạng sai:
+
+IoU đảm bảo chỉ chọn các hộp phát hiện có mức độ khớp đáng kể với vị trí dự đoán. Điều này giúp hệ thống bỏ qua các phát hiện không liên quan hoặc sai lệch.
+Ví dụ: Nếu có nhiều người trong khung hình, IoU sẽ giúp xác định đúng người đang được theo dõi thay vì chuyển sang một người khác.
+
+c) Cải thiện độ chính xác của theo dõi mục tiêu:
+
+Sử dụng IoU để kết hợp thông tin từ lịch sử vị trí và phát hiện hiện tại, đảm bảo mục tiêu được theo dõi chính xác ngay cả khi di chuyển hoặc khi có nhiều đối tượng trong khung hình.
+
+**- Ví dụ hoạt động**
+
+Giả sử hệ thống đang theo dõi một người có vị trí dự đoán P, và có hai hộp phát hiện:
+
+Box A: IoU = 0.8 (khớp cao).
+Box B: IoU = 0.2 (khớp thấp).
+-> Chương trình sẽ chọn Box A để tiếp tục theo dõi, vì IoU cao hơn ngưỡng (0.3).
 
 3. Xử lý độ sâu (calculate_distance)
 
@@ -107,6 +143,95 @@ def calculate_distance(depth_image, x, y, w, h):
 Lấy độ sâu trung bình của vùng trung tâm đối tượng
 Lọc các giá trị không hợp lệ
 Chuyển đổi từ mm sang m
+
+**Phân tích cách sử dụng dữ liệu độ sâu từ Kinect để tính khoảng cách**
+
+Trong mã nguồn, dữ liệu độ sâu từ Kinect được sử dụng để tính khoảng cách đến người được phát hiện. Đây là cách giúp hệ thống biết khoảng cách chính xác giữa camera (hoặc robot) và mục tiêu. Phương thức đảm nhiệm vai trò này là ```calculate_distance```.
+
+_a) Cách hoạt động của Kinect v2_
+
+Kinect v2 cung cấp ảnh độ sâu (depth image), trong đó mỗi pixel đại diện cho khoảng cách từ camera đến đối tượng tại vị trí đó.
+Giá trị độ sâu thường được đo bằng milimet và có thể chuyển đổi sang mét để sử dụng trong ứng dụng thực tế.
+
+_b) Mã tính toán khoảng cách_
+
+Phương thức ```calculate_distance``` được triển khai như sau:
+```python
+def calculate_distance(depth_image, x, y, w, h):
+    center_x = x + w // 2
+    center_y = y + h // 2
+    
+    if (center_x >= depth_image.shape[1] or center_y >= depth_image.shape[0] or
+        center_x < 0 or center_y < 0):
+        return None
+    
+    x_start = max(0, center_x - 1)
+    x_end = min(depth_image.shape[1], center_x + 2)
+    y_start = max(0, center_y - 1)
+    y_end = min(depth_image.shape[0], center_y + 2)
+    
+    region = depth_image[y_start:y_end, x_start:x_end]
+    valid_depths = region[(region > 0) & (region < 10000)]
+    
+    if len(valid_depths) > 0:
+        return np.median(valid_depths) / 1000.0
+    return None
+```
+c) Phân tích chi tiết
+
+_- Xác định trung tâm hộp phát hiện_
+
+Input: Hộp phát hiện người (x,y,w,h).
+
+_Tính toán:_
+
+Tọa độ trung tâm của hộp:
+![image](https://github.com/user-attachments/assets/e22af8f5-3053-4e31-82d6-8f8fa3903bb8)
+
+Đây là điểm được dùng để lấy giá trị độ sâu từ ảnh.
+
+_- Xử lý ngoại lệ_
+
+Kiểm tra xem tọa độ trung tâm có nằm trong giới hạn của ảnh độ sâu hay không.
+Nếu tọa độ nằm ngoài khung hình, trả về None.
+
+_- Trích xuất vùng lân cận_
+
+Lấy vùng lân cận 3×3 pixel quanh trung tâm:
+```python
+x_start = max(0, center_x - 1)
+x_end = min(depth_image.shape[1], center_x + 2)
+y_start = max(0, center_y - 1)
+y_end = min(depth_image.shape[0], center_y + 2)
+
+```
+_- Tính khoảng cách trung bình_
+
+
+>**Phân tích tính năng di chuyển robot để giữ người phát hiện luôn ở tâm màn hình**
+
+1. Mục tiêu của tính năng
+Tính năng này nhằm đảm bảo robot có thể tự động điều chỉnh hướng và vị trí của mình sao cho người được phát hiện (person) luôn nằm ở tâm khung hình. Đây là bước quan trọng trong việc triển khai chức năng "theo dõi người" (person-following).
+
+2. Cách thức hoạt động trong mã
+Mã sử dụng tâm của hộp phát hiện người (bounding box) và vị trí trung tâm của khung hình để tính toán lệnh điều khiển (command) cho robot.
+
+a. Xác định vị trí người so với tâm màn hình
+Trong phương thức update của lớp PersonTracker:
+
+Lấy tọa độ trung tâm của hộp phát hiện:
+
+Nếu có hộp phát hiện (x,y,w,h), tính trung tâm:
+![image](https://github.com/user-attachments/assets/dc5fc6c2-e700-4fa6-912a-7e3f430c28e8)
+
+Chuẩn hóa center_x theo bề rộng của màn hình:
+![image](https://github.com/user-attachments/assets/993533c9-167c-4011-aa7b-a232f236df75)
+
+Trong mã, mặc định bề rộng của khung hình = 640 pixel, nên trung tâm nằm ở tọa độ x = 320.
+```python
+self.last_x_center = ((x + w/2) - 320) / 320
+```
+
 
 **Các điểm tối ưu:**
 
