@@ -373,7 +373,7 @@ def main():
                 
                 # Show search status
                 if search_command != 0:
-                    direction = "RIGHT" if search_command > 0 else "LEFT"
+                    direction = "LEFT" if search_command > 0 else "RIGHT"
                     cv2.putText(color_image, f'Searching {direction}', (10, 60),
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 
